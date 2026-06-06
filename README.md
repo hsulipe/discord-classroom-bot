@@ -1,6 +1,6 @@
 # Discord Classroom Attendance Bot
 
-A Discord bot for tracking student attendance in voice-channel classes. Teachers control the session lifecycle; students sign presence via command or button.
+A Discord bot for tracking student attendance in voice-channel classes. Teachers control the session lifecycle; students sign presence via command or button. Attendance reports use real names that students register when joining the server.
 
 ---
 
@@ -10,6 +10,8 @@ A Discord bot for tracking student attendance in voice-channel classes. Teachers
 - **`!presence`** — opens a mid-class presence check with a clickable button
 - **`!present`** — students sign presence by command (alternative to the button)
 - **`!endclass`** — closes the session and posts an attendance report to a dedicated channel
+- **`!register`** — students register their real name so it appears in reports instead of their username
+- **`!setname`** — teachers set or correct a student's registered name
 
 ---
 
@@ -114,22 +116,47 @@ You should see a log line like:
 
 ## Usage
 
-### For teachers
+### Name Registration
 
-| Command | Description |
-|---|---|
-| `!start` | Start a class. You must be in a voice channel. Bot records everyone already present. |
-| `!presence` | Open a presence check. Students have 30 minutes or until `!endclass`. |
-| `!endclass` | End the class. Closes any open presence check and posts the attendance report. |
+Attendance reports show each student's **registered real name** instead of their Discord username or nickname. There are three ways a name can be registered:
 
-### For students
+1. **On join (automatic):** When a new member joins the server, the bot sends them a DM with a **Set My Name** button. Clicking it opens a popup form where they type their full name.
 
-| Command | Description |
-|---|---|
-| `!present` | Sign your presence during an open presence check. |
-| Button | Click the **✅ Sign Presence** button posted by `!presence`. |
+2. **`!register` command (self-service):** Any member can register or update their name at any time by typing in any channel:
+   ```
+   !register John Silva
+   ```
+   The bot confirms the saved name in the same channel.
 
-> Students can only sign once per presence check. Attempting to sign twice returns an error.
+3. **`!setname` command (teacher override):** A teacher can set a name on behalf of any member — useful when a student has DMs disabled or needs a correction:
+   ```
+   !setname @username John Silva
+   ```
+   The bot confirms in the channel and notifies the student via DM.
+
+> Names are saved to `names.json` and persist across bot restarts. If a student has not registered, the report falls back to their Discord display name.
+
+---
+
+### Command Reference
+
+#### Teacher commands
+
+| Command | Arguments | Description |
+|---|---|---|
+| `!start` | — | Start a class session. You must be in a voice channel. The bot records all students already present and begins tracking joins/leaves. Only one session can be active per server at a time. |
+| `!presence` | — | Open a presence check. Posts a **✅ Sign Presence** button and accepts `!present` until the session ends or a new `!presence` is called (which closes the previous one). |
+| `!endclass` | — | End the class. Closes any open presence check and posts the full attendance report to the configured report channel. |
+| `!setname` | `@member` `Full Name` | Set or correct the registered name for a specific member. Requires the Teacher role. Sends a DM to the affected member notifying them of the change. |
+
+#### Student commands
+
+| Command | Arguments | Description |
+|---|---|---|
+| `!present` | — | Sign your presence during an open presence check. Can only be used once per check. |
+| `!register` | `Full Name` | Register your real name. This name will appear in all future attendance reports. Can be used at any time to register or update your name. |
+
+> Students can only sign once per presence check. Attempting to sign twice returns an error message visible only to them.
 
 ---
 
@@ -146,12 +173,12 @@ Total students: 3
 
 Name                     Time in session    Presence
 ------------------------------------------------------------
-Alice                    1h 28m 12s         Confirmed present
-Bob                      45m 3s             Joined only
-Carol                    1h 30m 0s          Confirmed present
+John Silva               1h 28m 12s         Confirmed present
+Maria Oliveira           45m 3s             Joined only
+Carlos Souza             1h 30m 0s          Confirmed present
 ```
 
-- **Confirmed present** — student signed at least one presence check
+- **Confirmed present** — student signed at least one presence check (via button or `!present`)
 - **Joined only** — student was in the voice channel but did not sign any presence check
 
 ---
@@ -161,3 +188,5 @@ Carol                    1h 30m 0s          Confirmed present
 - Only one class session can be active per server at a time. Run `!endclass` before starting a new one.
 - Session state is held in memory. If the bot restarts mid-class, the session is lost.
 - The bot tracks the voice channel the teacher was in when `!start` was called. Students in other channels are not tracked.
+- `names.json` is created automatically on first registration. If the file is deleted, names are lost and reports fall back to Discord display names until students re-register.
+- Students who joined the server before the bot was deployed will not receive an on-join DM. Ask them to run `!register Full Name` in any channel before the first class.
