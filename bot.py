@@ -195,19 +195,27 @@ async def on_ready():
 
 @bot.event
 async def on_member_join(member: discord.Member) -> None:
-    welcome_text = (
-        f"Welcome {member.mention}! "
-        "Please register your real name so the teacher can identify you in attendance reports."
-    )
     if WELCOME_CHANNEL_ID:
         channel = bot.get_channel(int(WELCOME_CHANNEL_ID))
         if channel:
-            msg = await channel.send(welcome_text, view=RegistrationView())
-            welcome_messages[member.id] = msg
+            await channel.send(f"Welcome {member.mention}! Check your private thread to complete registration.")
+            thread = await channel.create_thread(
+                name=f"Welcome {member.display_name}",
+                type=discord.ChannelType.private_thread,
+                invitable=False,
+            )
+            await thread.add_user(member)
+            await thread.send(
+                f"Hi {member.mention}! Please register your real name so the teacher can identify you in attendance reports.",
+                view=RegistrationView(thread=thread),
+            )
             return
         logger.warning("Welcome channel id=%s not found, falling back to DM", WELCOME_CHANNEL_ID)
     try:
-        await member.send(welcome_text, view=RegistrationView())
+        await member.send(
+            f"Welcome {member.mention}! Please register your real name so the teacher can identify you in attendance reports.",
+            view=RegistrationView(),
+        )
     except discord.Forbidden:
         logger.warning("Could not DM %s (id=%s) — DMs disabled", member, member.id)
 
@@ -244,6 +252,10 @@ class RegistrationModal(discord.ui.Modal, title="Register Your Name"):
         max_length=80,
     )
 
+    def __init__(self, thread: Optional[discord.Thread] = None):
+        super().__init__()
+        self.thread = thread
+
     async def on_submit(self, interaction: discord.Interaction) -> None:
         real_name = self.full_name.value.strip()
         names[str(interaction.user.id)] = real_name
@@ -268,15 +280,21 @@ class RegistrationModal(discord.ui.Modal, title="Register Your Name"):
                 await msg.edit(content=f"✅ **{real_name}** has registered.", view=None)
             except discord.HTTPException:
                 pass
+        if self.thread:
+            try:
+                await self.thread.edit(archived=True)
+            except discord.HTTPException:
+                logger.warning("Could not archive registration thread id=%s", self.thread.id)
 
 
 class RegistrationView(discord.ui.View):
-    def __init__(self):
+    def __init__(self, thread: Optional[discord.Thread] = None):
         super().__init__(timeout=None)
+        self.thread = thread
 
     @discord.ui.button(label="Set My Name", style=discord.ButtonStyle.primary)
     async def set_name(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(RegistrationModal())
+        await interaction.response.send_modal(RegistrationModal(thread=self.thread))
 
 
 class PresenceView(discord.ui.View):
@@ -335,6 +353,19 @@ async def cmd_setname(ctx: commands.Context, member: discord.Member = None, *, f
         )
     else:
         await ctx.send(f"Set {member.mention}'s name to **{real_name}**, nickname and role updated.")
+
+
+@cmd_setname.error
+async def cmd_setname_error(ctx: commands.Context, error: commands.CommandError):
+    if isinstance(error, commands.MemberNotFound):
+        await ctx.send(
+            f"Member `{error.argument}` not found. "
+            "Use a proper Discord mention: type `!setname ` then **@** and click the member's name from the autocomplete list."
+        )
+    elif isinstance(error, commands.MissingRequiredArgument):
+        await ctx.send("Usage: `!setname @member Their Full Name`")
+    else:
+        raise error
     try:
         await member.send(
             f"Your attendance name has been set to **{real_name}** by the teacher."
