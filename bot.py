@@ -78,20 +78,26 @@ def save_names() -> None:
     os.replace(tmp, NAMES_FILE)
 
 
-async def apply_registration(member: discord.Member, real_name: str) -> None:
+async def apply_registration(member: discord.Member, real_name: str) -> list[str]:
+    """Applies nickname and role after registration. Returns a list of human-readable failure descriptions."""
+    issues: list[str] = []
     try:
         await member.edit(nick=real_name)
     except discord.Forbidden:
-        logger.warning("Could not set nickname for %s (id=%s) — insufficient permissions", member, member.id)
+        logger.warning("Could not set nickname for %s (id=%s)", member, member.id)
+        issues.append("nickname — bot needs **Manage Nicknames** permission and its role must be above yours in Server Settings → Roles")
     if MEMBER_ROLE_NAME:
         role = discord.utils.get(member.guild.roles, name=MEMBER_ROLE_NAME)
         if role:
             try:
                 await member.add_roles(role)
             except discord.Forbidden:
-                logger.warning("Could not assign role %r to %s (id=%s) — check role hierarchy", MEMBER_ROLE_NAME, member, member.id)
+                logger.warning("Could not assign role %r to %s (id=%s)", MEMBER_ROLE_NAME, member, member.id)
+                issues.append(f"role **{MEMBER_ROLE_NAME}** — bot role must be above **{MEMBER_ROLE_NAME}** in Server Settings → Roles")
         else:
             logger.warning("Member role %r not found in guild %s", MEMBER_ROLE_NAME, member.guild.name)
+            issues.append(f"role **{MEMBER_ROLE_NAME}** — role not found, check `MEMBER_ROLE_NAME` in `.env`")
+    return issues
 
 
 def is_teacher(member: discord.Member) -> bool:
@@ -246,7 +252,16 @@ class RegistrationModal(discord.ui.Modal, title="Register Your Name"):
             f"Name registered as **{real_name}**. It will appear in attendance reports.",
             ephemeral=True,
         )
-        await apply_registration(interaction.user, real_name)
+        # interaction.user may be discord.User (not Member) in some contexts; resolve from guild
+        member = interaction.guild.get_member(interaction.user.id) if interaction.guild else None
+        if member:
+            issues = await apply_registration(member, real_name)
+            if issues:
+                await interaction.followup.send(
+                    f"⚠️ Name saved, but the following could not be applied:\n"
+                    + "\n".join(f"• {i}" for i in issues),
+                    ephemeral=True,
+                )
         msg = welcome_messages.pop(interaction.user.id, None)
         if msg:
             try:
@@ -291,8 +306,14 @@ async def cmd_register(ctx: commands.Context, *, full_name: str = ""):
         return
     names[str(ctx.author.id)] = real_name
     save_names()
-    await apply_registration(ctx.author, real_name)
-    await ctx.send(f"Registered as **{real_name}**. This name will appear in attendance reports.")
+    issues = await apply_registration(ctx.author, real_name)
+    if issues:
+        await ctx.send(
+            f"Name saved as **{real_name}**, but the following could not be applied:\n"
+            + "\n".join(f"• {i}" for i in issues)
+        )
+    else:
+        await ctx.send(f"Registered as **{real_name}**. Nickname and role updated.")
 
 
 @bot.command(name="setname")
@@ -306,8 +327,14 @@ async def cmd_setname(ctx: commands.Context, member: discord.Member = None, *, f
     real_name = full_name.strip()
     names[str(member.id)] = real_name
     save_names()
-    await apply_registration(member, real_name)
-    await ctx.send(f"Set **{member.display_name}**'s attendance name to **{real_name}**.")
+    issues = await apply_registration(member, real_name)
+    if issues:
+        await ctx.send(
+            f"Name saved as **{real_name}** for {member.mention}, but the following could not be applied:\n"
+            + "\n".join(f"• {i}" for i in issues)
+        )
+    else:
+        await ctx.send(f"Set {member.mention}'s name to **{real_name}**, nickname and role updated.")
     try:
         await member.send(
             f"Your attendance name has been set to **{real_name}** by the teacher."
