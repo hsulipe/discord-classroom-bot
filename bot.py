@@ -14,6 +14,8 @@ load_dotenv()
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 REPORT_CHANNEL_ID = os.getenv("REPORT_CHANNEL_ID")
 TEACHER_ROLE_NAME = os.getenv("TEACHER_ROLE_NAME", "Teacher")
+WELCOME_CHANNEL_ID = os.getenv("WELCOME_CHANNEL_ID")
+MEMBER_ROLE_NAME = os.getenv("MEMBER_ROLE_NAME")
 NAMES_FILE = "names.json"
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -54,6 +56,9 @@ sessions: dict[int, SessionState] = {}
 # Real-name registry: member_id (str) -> real name
 names: dict[str, str] = {}
 
+# Pending welcome messages: member_id -> Message (cleared after registration)
+welcome_messages: dict[int, discord.Message] = {}
+
 
 def load_names() -> None:
     global names
@@ -70,6 +75,22 @@ def save_names() -> None:
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(names, f, ensure_ascii=False, indent=2)
     os.replace(tmp, NAMES_FILE)
+
+
+async def apply_registration(member: discord.Member, real_name: str) -> None:
+    try:
+        await member.edit(nick=real_name)
+    except discord.Forbidden:
+        logger.warning("Could not set nickname for %s (id=%s) — insufficient permissions", member, member.id)
+    if MEMBER_ROLE_NAME:
+        role = discord.utils.get(member.guild.roles, name=MEMBER_ROLE_NAME)
+        if role:
+            try:
+                await member.add_roles(role)
+            except discord.Forbidden:
+                logger.warning("Could not assign role %r to %s (id=%s) — check role hierarchy", MEMBER_ROLE_NAME, member, member.id)
+        else:
+            logger.warning("Member role %r not found in guild %s", MEMBER_ROLE_NAME, member.guild.name)
 
 
 def is_teacher(member: discord.Member) -> bool:
@@ -165,12 +186,19 @@ async def on_ready():
 
 @bot.event
 async def on_member_join(member: discord.Member) -> None:
+    welcome_text = (
+        f"Welcome {member.mention}! "
+        "Please register your real name so the teacher can identify you in attendance reports."
+    )
+    if WELCOME_CHANNEL_ID:
+        channel = bot.get_channel(int(WELCOME_CHANNEL_ID))
+        if channel:
+            msg = await channel.send(welcome_text, view=RegistrationView())
+            welcome_messages[member.id] = msg
+            return
+        logger.warning("Welcome channel id=%s not found, falling back to DM", WELCOME_CHANNEL_ID)
     try:
-        await member.send(
-            f"Welcome to **{member.guild.name}**! "
-            "Please register your real name so the teacher can identify you in attendance reports.",
-            view=RegistrationView(),
-        )
+        await member.send(welcome_text, view=RegistrationView())
     except discord.Forbidden:
         logger.warning("Could not DM %s (id=%s) — DMs disabled", member, member.id)
 
@@ -215,6 +243,13 @@ class RegistrationModal(discord.ui.Modal, title="Register Your Name"):
             f"Name registered as **{real_name}**. It will appear in attendance reports.",
             ephemeral=True,
         )
+        await apply_registration(interaction.user, real_name)
+        msg = welcome_messages.pop(interaction.user.id, None)
+        if msg:
+            try:
+                await msg.edit(content=f"✅ **{real_name}** has registered.", view=None)
+            except discord.HTTPException:
+                pass
 
 
 class RegistrationView(discord.ui.View):
@@ -253,6 +288,7 @@ async def cmd_register(ctx: commands.Context, *, full_name: str = ""):
         return
     names[str(ctx.author.id)] = real_name
     save_names()
+    await apply_registration(ctx.author, real_name)
     await ctx.send(f"Registered as **{real_name}**. This name will appear in attendance reports.")
 
 
@@ -267,6 +303,7 @@ async def cmd_setname(ctx: commands.Context, member: discord.Member = None, *, f
     real_name = full_name.strip()
     names[str(member.id)] = real_name
     save_names()
+    await apply_registration(member, real_name)
     await ctx.send(f"Set **{member.display_name}**'s attendance name to **{real_name}**.")
     try:
         await member.send(
