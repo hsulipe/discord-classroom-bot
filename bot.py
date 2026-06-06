@@ -1,3 +1,4 @@
+import json
 import os
 import logging
 from dataclasses import dataclass, field
@@ -13,6 +14,7 @@ load_dotenv()
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 REPORT_CHANNEL_ID = os.getenv("REPORT_CHANNEL_ID")
 TEACHER_ROLE_NAME = os.getenv("TEACHER_ROLE_NAME", "Teacher")
+NAMES_FILE = "names.json"
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -49,6 +51,26 @@ class SessionState:
 # Per-guild session registry
 sessions: dict[int, SessionState] = {}
 
+# Real-name registry: member_id (str) -> real name
+names: dict[str, str] = {}
+
+
+def load_names() -> None:
+    global names
+    if os.path.exists(NAMES_FILE):
+        try:
+            with open(NAMES_FILE, "r", encoding="utf-8") as f:
+                names = json.load(f)
+        except (json.JSONDecodeError, OSError) as exc:
+            logger.warning("Could not load %s: %s", NAMES_FILE, exc)
+
+
+def save_names() -> None:
+    tmp = NAMES_FILE + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(names, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, NAMES_FILE)
+
 
 def is_teacher(member: discord.Member) -> bool:
     return any(r.name == TEACHER_ROLE_NAME for r in member.roles)
@@ -69,6 +91,13 @@ async def close_presence(session: SessionState) -> None:
                 logger.warning("Could not edit presence message: %s", exc)
     session.presence_checks.append(pc)
     session.active_presence = None
+
+
+def resolve_name(member_id: int, guild: discord.Guild) -> str:
+    if str(member_id) in names:
+        return names[str(member_id)]
+    member = guild.get_member(member_id)
+    return member.display_name if member else f"<id:{member_id}>"
 
 
 def build_report(session: SessionState, guild: discord.Guild) -> str:
@@ -117,8 +146,7 @@ def build_report(session: SessionState, guild: discord.Guild) -> str:
     lines.append("-" * 60)
 
     for mid in member_ids:
-        member = guild.get_member(mid)
-        name = (member.display_name if member else f"<id:{mid}>")[:23]
+        name = resolve_name(mid, guild)[:23]
         secs = int(member_time.get(mid, 0))
         mm, ss = divmod(secs, 60)
         hh, mm = divmod(mm, 60)
@@ -133,6 +161,18 @@ def build_report(session: SessionState, guild: discord.Guild) -> str:
 @bot.event
 async def on_ready():
     logger.info("Logged in as %s (id=%s)", bot.user, bot.user.id)
+
+
+@bot.event
+async def on_member_join(member: discord.Member) -> None:
+    try:
+        await member.send(
+            f"Welcome to **{member.guild.name}**! "
+            "Please register your real name so the teacher can identify you in attendance reports.",
+            view=RegistrationView(),
+        )
+    except discord.Forbidden:
+        logger.warning("Could not DM %s (id=%s) — DMs disabled", member, member.id)
 
 
 @bot.event
@@ -159,6 +199,33 @@ async def on_voice_state_update(
         session.join_leave_log.append({"type": "leave", "member_id": member.id, "timestamp": now})
 
 
+class RegistrationModal(discord.ui.Modal, title="Register Your Name"):
+    full_name = discord.ui.TextInput(
+        label="Full Name",
+        placeholder="e.g. John Silva",
+        min_length=2,
+        max_length=80,
+    )
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        real_name = self.full_name.value.strip()
+        names[str(interaction.user.id)] = real_name
+        save_names()
+        await interaction.response.send_message(
+            f"Name registered as **{real_name}**. It will appear in attendance reports.",
+            ephemeral=True,
+        )
+
+
+class RegistrationView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="Set My Name", style=discord.ButtonStyle.primary)
+    async def set_name(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(RegistrationModal())
+
+
 class PresenceView(discord.ui.View):
     def __init__(self, guild_id: int):
         super().__init__(timeout=None)
@@ -176,6 +243,37 @@ class PresenceView(discord.ui.View):
             return
         session.active_presence.signatories.add(user_id)
         await interaction.response.send_message("Presence signed!", ephemeral=True)
+
+
+@bot.command(name="register")
+async def cmd_register(ctx: commands.Context, *, full_name: str = ""):
+    real_name = full_name.strip()
+    if not real_name:
+        await ctx.send("Usage: `!register Your Full Name`")
+        return
+    names[str(ctx.author.id)] = real_name
+    save_names()
+    await ctx.send(f"Registered as **{real_name}**. This name will appear in attendance reports.")
+
+
+@bot.command(name="setname")
+async def cmd_setname(ctx: commands.Context, member: discord.Member = None, *, full_name: str = ""):
+    if not is_teacher(ctx.author):
+        await ctx.send("Permission denied: Teacher role required.")
+        return
+    if member is None or not full_name.strip():
+        await ctx.send("Usage: `!setname @member Their Full Name`")
+        return
+    real_name = full_name.strip()
+    names[str(member.id)] = real_name
+    save_names()
+    await ctx.send(f"Set **{member.display_name}**'s attendance name to **{real_name}**.")
+    try:
+        await member.send(
+            f"Your attendance name has been set to **{real_name}** by the teacher."
+        )
+    except discord.Forbidden:
+        pass
 
 
 @bot.command(name="start")
@@ -290,4 +388,5 @@ async def cmd_present(ctx: commands.Context):
 if __name__ == "__main__":
     if not DISCORD_TOKEN:
         raise RuntimeError("DISCORD_TOKEN not set in environment.")
+    load_names()
     bot.run(DISCORD_TOKEN)
