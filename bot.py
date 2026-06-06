@@ -45,6 +45,7 @@ class SessionState:
     teacher_id: int = 0
     start_time: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     end_time: Optional[datetime] = None
+    class_name: str = ""
     join_leave_log: list = field(default_factory=list)
     presence_checks: list = field(default_factory=list)
     active_presence: Optional[PresenceCheck] = None
@@ -149,8 +150,10 @@ def build_report(session: SessionState, guild: discord.Guild) -> str:
     for mid, join_ts in last_join.items():
         member_time[mid] = member_time.get(mid, 0.0) + (end - join_ts).total_seconds()
 
-    lines = [
-        "**Attendance Report**",
+    lines = ["**Attendance Report**"]
+    if session.class_name:
+        lines.append(f"Class  : {session.class_name}")
+    lines += [
         f"Start  : {session.start_time.strftime('%Y-%m-%d %H:%M:%S UTC')}",
         f"End    : {end.strftime('%Y-%m-%d %H:%M:%S UTC')}",
         f"Duration: {h}h {m}m {s}s",
@@ -314,7 +317,7 @@ async def cmd_setname(ctx: commands.Context, member: discord.Member = None, *, f
 
 
 @bot.command(name="start")
-async def cmd_start(ctx: commands.Context):
+async def cmd_start(ctx: commands.Context, *, class_name: str = ""):
     if not is_teacher(ctx.author):
         await ctx.send("Permission denied: Teacher role required.")
         return
@@ -332,17 +335,18 @@ async def cmd_start(ctx: commands.Context):
         voice_channel_id=channel.id,
         teacher_id=ctx.author.id,
         start_time=now,
+        class_name=class_name.strip(),
     )
 
-    # Record members already present in channel (task 6.1)
     for member in channel.members:
         if member.id != ctx.author.id:
             new_session.join_leave_log.append({"type": "join", "member_id": member.id, "timestamp": now})
 
     sessions[ctx.guild.id] = new_session
     count = len(channel.members) - 1
+    label = f'Class "{new_session.class_name}" started' if new_session.class_name else "Class started"
     await ctx.send(
-        f"Class started in **{channel.name}**. "
+        f"{label} in **{channel.name}**. "
         f"Tracking attendance ({count} student(s) already present)."
     )
 
