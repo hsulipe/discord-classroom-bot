@@ -85,7 +85,7 @@ async def apply_registration(member: discord.Member, real_name: str) -> list[str
         await member.edit(nick=real_name)
     except discord.Forbidden:
         logger.warning("Could not set nickname for %s (id=%s)", member, member.id)
-        issues.append("nickname — bot needs **Manage Nicknames** permission and its role must be above yours in Server Settings → Roles")
+        issues.append("apelido — o bot precisa da permissão **Gerenciar Apelidos** e seu cargo deve estar acima do seu em Configurações do Servidor → Cargos")
     if MEMBER_ROLE_NAME:
         role = discord.utils.get(member.guild.roles, name=MEMBER_ROLE_NAME)
         if role:
@@ -93,10 +93,10 @@ async def apply_registration(member: discord.Member, real_name: str) -> list[str
                 await member.add_roles(role)
             except discord.Forbidden:
                 logger.warning("Could not assign role %r to %s (id=%s)", MEMBER_ROLE_NAME, member, member.id)
-                issues.append(f"role **{MEMBER_ROLE_NAME}** — bot role must be above **{MEMBER_ROLE_NAME}** in Server Settings → Roles")
+                issues.append(f"cargo **{MEMBER_ROLE_NAME}** — o cargo do bot deve estar acima de **{MEMBER_ROLE_NAME}** em Configurações do Servidor → Cargos")
         else:
             logger.warning("Member role %r not found in guild %s", MEMBER_ROLE_NAME, member.guild.name)
-            issues.append(f"role **{MEMBER_ROLE_NAME}** — role not found, check `MEMBER_ROLE_NAME` in `.env`")
+            issues.append(f"cargo **{MEMBER_ROLE_NAME}** — cargo não encontrado, verifique `MEMBER_ROLE_NAME` no `.env`")
     return issues
 
 
@@ -114,7 +114,7 @@ async def close_presence(session: SessionState) -> None:
             item.disabled = True
         if pc.message:
             try:
-                await pc.message.edit(content="Presence check closed.", view=pc.view)
+                await pc.message.edit(content="Verificação de presença encerrada.", view=pc.view)
             except discord.HTTPException as exc:
                 logger.warning("Could not edit presence message: %s", exc)
     session.presence_checks.append(pc)
@@ -156,23 +156,23 @@ def build_report(session: SessionState, guild: discord.Guild) -> str:
     for mid, join_ts in last_join.items():
         member_time[mid] = member_time.get(mid, 0.0) + (end - join_ts).total_seconds()
 
-    lines = ["**Attendance Report**"]
+    lines = ["**Relatório de Presença**"]
     if session.class_name:
-        lines.append(f"Class  : {session.class_name}")
+        lines.append(f"Turma  : {session.class_name}")
     lines += [
-        f"Start  : {session.start_time.strftime('%Y-%m-%d %H:%M:%S UTC')}",
-        f"End    : {end.strftime('%Y-%m-%d %H:%M:%S UTC')}",
-        f"Duration: {h}h {m}m {s}s",
-        f"Total students: {len(member_ids)}",
+        f"Início : {session.start_time.strftime('%Y-%m-%d %H:%M:%S UTC')}",
+        f"Fim    : {end.strftime('%Y-%m-%d %H:%M:%S UTC')}",
+        f"Duração: {h}h {m}m {s}s",
+        f"Total de alunos: {len(member_ids)}",
         "",
     ]
 
     if not member_ids:
-        lines.append("No students attended.")
+        lines.append("Nenhum aluno participou.")
         return "\n".join(lines)
 
     lines.append("```")
-    lines.append(f"{'Name':<24} {'Time in session':<18} Presence")
+    lines.append(f"{'Nome':<24} {'Tempo na aula':<18} Presença")
     lines.append("-" * 60)
 
     for mid in member_ids:
@@ -181,7 +181,7 @@ def build_report(session: SessionState, guild: discord.Guild) -> str:
         mm, ss = divmod(secs, 60)
         hh, mm = divmod(mm, 60)
         time_str = f"{hh}h {mm}m {ss}s" if hh else f"{mm}m {ss}s"
-        status = "Confirmed present" if mid in all_signatories else "Joined only"
+        status = "Presença confirmada" if mid in all_signatories else "Apenas entrou"
         lines.append(f"{name:<24} {time_str:<18} {status}")
 
     lines.append("```")
@@ -198,7 +198,7 @@ async def on_member_join(member: discord.Member) -> None:
     if WELCOME_CHANNEL_ID:
         channel = bot.get_channel(int(WELCOME_CHANNEL_ID))
         if channel:
-            await channel.send(f"Welcome {member.mention}! Check your private thread to complete registration.")
+            await channel.send(f"Bem-vindo(a) {member.mention}! Verifique seu tópico privado para concluir o cadastro.")
             thread = await channel.create_thread(
                 name=f"Welcome {member.display_name}",
                 type=discord.ChannelType.private_thread,
@@ -206,14 +206,14 @@ async def on_member_join(member: discord.Member) -> None:
             )
             await thread.add_user(member)
             await thread.send(
-                f"Hi {member.mention}! Please register your real name so the teacher can identify you in attendance reports.",
+                f"Olá {member.mention}! Por favor, cadastre seu nome real para que o professor possa identificá-lo(a) nos relatórios de presença.",
                 view=RegistrationView(thread=thread),
             )
             return
         logger.warning("Welcome channel id=%s not found, falling back to DM", WELCOME_CHANNEL_ID)
     try:
         await member.send(
-            f"Welcome {member.mention}! Please register your real name so the teacher can identify you in attendance reports.",
+            f"Bem-vindo(a) {member.mention}! Por favor, cadastre seu nome real para que o professor possa identificá-lo(a) nos relatórios de presença.",
             view=RegistrationView(),
         )
     except discord.Forbidden:
@@ -244,10 +244,10 @@ async def on_voice_state_update(
         session.join_leave_log.append({"type": "leave", "member_id": member.id, "timestamp": now})
 
 
-class RegistrationModal(discord.ui.Modal, title="Register Your Name"):
+class RegistrationModal(discord.ui.Modal, title="Cadastre seu Nome"):
     full_name = discord.ui.TextInput(
-        label="Full Name",
-        placeholder="e.g. John Silva",
+        label="Nome Completo",
+        placeholder="ex.: João Silva",
         min_length=2,
         max_length=80,
     )
@@ -261,7 +261,7 @@ class RegistrationModal(discord.ui.Modal, title="Register Your Name"):
         names[str(interaction.user.id)] = real_name
         save_names()
         await interaction.response.send_message(
-            f"Name registered as **{real_name}**. It will appear in attendance reports.",
+            f"Nome cadastrado como **{real_name}**. Ele aparecerá nos relatórios de presença.",
             ephemeral=True,
         )
         # interaction.user may be discord.User (not Member) in some contexts; resolve from guild
@@ -270,14 +270,14 @@ class RegistrationModal(discord.ui.Modal, title="Register Your Name"):
             issues = await apply_registration(member, real_name)
             if issues:
                 await interaction.followup.send(
-                    f"⚠️ Name saved, but the following could not be applied:\n"
+                    f"⚠️ Nome salvo, mas os itens a seguir não puderam ser aplicados:\n"
                     + "\n".join(f"• {i}" for i in issues),
                     ephemeral=True,
                 )
         msg = welcome_messages.pop(interaction.user.id, None)
         if msg:
             try:
-                await msg.edit(content=f"✅ **{real_name}** has registered.", view=None)
+                await msg.edit(content=f"✅ **{real_name}** realizou o cadastro.", view=None)
             except discord.HTTPException:
                 pass
         if self.thread:
@@ -292,7 +292,7 @@ class RegistrationView(discord.ui.View):
         super().__init__(timeout=None)
         self.thread = thread
 
-    @discord.ui.button(label="Set My Name", style=discord.ButtonStyle.primary)
+    @discord.ui.button(label="Definir Meu Nome", style=discord.ButtonStyle.primary)
     async def set_name(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(RegistrationModal(thread=self.thread))
 
@@ -302,45 +302,45 @@ class PresenceView(discord.ui.View):
         super().__init__(timeout=None)
         self.guild_id = guild_id
 
-    @discord.ui.button(label="Sign Presence", style=discord.ButtonStyle.green, emoji="✅")
+    @discord.ui.button(label="Assinar Presença", style=discord.ButtonStyle.green, emoji="✅")
     async def sign_presence(self, interaction: discord.Interaction, button: discord.ui.Button):
         session = sessions.get(self.guild_id)
         if not session or not session.active_presence or not session.active_presence.open:
-            await interaction.response.send_message("No open presence check.", ephemeral=True)
+            await interaction.response.send_message("Nenhuma verificação de presença aberta.", ephemeral=True)
             return
         user_id = interaction.user.id
         if user_id in session.active_presence.signatories:
-            await interaction.response.send_message("You already signed presence.", ephemeral=True)
+            await interaction.response.send_message("Você já assinou a presença.", ephemeral=True)
             return
         session.active_presence.signatories.add(user_id)
-        await interaction.response.send_message("Presence signed!", ephemeral=True)
+        await interaction.response.send_message("Presença assinada!", ephemeral=True)
 
 
 @bot.command(name="register")
 async def cmd_register(ctx: commands.Context, *, full_name: str = ""):
     real_name = full_name.strip()
     if not real_name:
-        await ctx.send("Usage: `!register Your Full Name`")
+        await ctx.send("Uso: `!register Seu Nome Completo`")
         return
     names[str(ctx.author.id)] = real_name
     save_names()
     issues = await apply_registration(ctx.author, real_name)
     if issues:
         await ctx.send(
-            f"Name saved as **{real_name}**, but the following could not be applied:\n"
+            f"Nome salvo como **{real_name}**, mas os itens a seguir não puderam ser aplicados:\n"
             + "\n".join(f"• {i}" for i in issues)
         )
     else:
-        await ctx.send(f"Registered as **{real_name}**. Nickname and role updated.")
+        await ctx.send(f"Cadastrado como **{real_name}**. Apelido e cargo atualizados.")
 
 
 @bot.command(name="setname")
 async def cmd_setname(ctx: commands.Context, member: discord.Member = None, *, full_name: str = ""):
     if not is_teacher(ctx.author):
-        await ctx.send("Permission denied: Teacher role required.")
+        await ctx.send("Permissão negada: cargo de Professor necessário.")
         return
     if member is None or not full_name.strip():
-        await ctx.send("Usage: `!setname @member Their Full Name`")
+        await ctx.send("Uso: `!setname @membro Nome Completo`")
         return
     real_name = full_name.strip()
     names[str(member.id)] = real_name
@@ -348,27 +348,27 @@ async def cmd_setname(ctx: commands.Context, member: discord.Member = None, *, f
     issues = await apply_registration(member, real_name)
     if issues:
         await ctx.send(
-            f"Name saved as **{real_name}** for {member.mention}, but the following could not be applied:\n"
+            f"Nome salvo como **{real_name}** para {member.mention}, mas os itens a seguir não puderam ser aplicados:\n"
             + "\n".join(f"• {i}" for i in issues)
         )
     else:
-        await ctx.send(f"Set {member.mention}'s name to **{real_name}**, nickname and role updated.")
+        await ctx.send(f"Nome de {member.mention} definido como **{real_name}**, apelido e cargo atualizados.")
 
 
 @cmd_setname.error
 async def cmd_setname_error(ctx: commands.Context, error: commands.CommandError):
     if isinstance(error, commands.MemberNotFound):
         await ctx.send(
-            f"Member `{error.argument}` not found. "
-            "Use a proper Discord mention: type `!setname ` then **@** and click the member's name from the autocomplete list."
+            f"Membro `{error.argument}` não encontrado. "
+            "Use uma menção válida do Discord: digite `!setname ` seguido de **@** e clique no nome do membro na lista de autocompletar."
         )
     elif isinstance(error, commands.MissingRequiredArgument):
-        await ctx.send("Usage: `!setname @member Their Full Name`")
+        await ctx.send("Uso: `!setname @membro Nome Completo`")
     else:
         raise error
     try:
         await member.send(
-            f"Your attendance name has been set to **{real_name}** by the teacher."
+            f"Seu nome para presença foi definido como **{real_name}** pelo professor."
         )
     except discord.Forbidden:
         pass
@@ -377,14 +377,14 @@ async def cmd_setname_error(ctx: commands.Context, error: commands.CommandError)
 @bot.command(name="start")
 async def cmd_start(ctx: commands.Context, *, class_name: str = ""):
     if not is_teacher(ctx.author):
-        await ctx.send("Permission denied: Teacher role required.")
+        await ctx.send("Permissão negada: cargo de Professor necessário.")
         return
     session = sessions.get(ctx.guild.id)
     if session and session.active:
-        await ctx.send("A class is already in progress. Use `!endclass` first.")
+        await ctx.send("Já há uma aula em andamento. Use `!endclass` primeiro.")
         return
     if not ctx.author.voice or not ctx.author.voice.channel:
-        await ctx.send("You must be in a voice channel to start a class.")
+        await ctx.send("Você precisa estar em um canal de voz para iniciar uma aula.")
         return
 
     channel = ctx.author.voice.channel
@@ -402,21 +402,21 @@ async def cmd_start(ctx: commands.Context, *, class_name: str = ""):
 
     sessions[ctx.guild.id] = new_session
     count = len(channel.members) - 1
-    label = f'Class "{new_session.class_name}" started' if new_session.class_name else "Class started"
+    label = f'Aula "{new_session.class_name}" iniciada' if new_session.class_name else "Aula iniciada"
     await ctx.send(
-        f"{label} in **{channel.name}**. "
-        f"Tracking attendance ({count} student(s) already present)."
+        f"{label} em **{channel.name}**. "
+        f"Monitorando presença ({count} aluno(s) já presente(s))."
     )
 
 
 @bot.command(name="endclass")
 async def cmd_endclass(ctx: commands.Context):
     if not is_teacher(ctx.author):
-        await ctx.send("Permission denied: Teacher role required.")
+        await ctx.send("Permissão negada: cargo de Professor necessário.")
         return
     session = sessions.get(ctx.guild.id)
     if not session or not session.active:
-        await ctx.send("No class is in progress.")
+        await ctx.send("Nenhuma aula em andamento.")
         return
 
     session.active = False
@@ -436,30 +436,30 @@ async def cmd_endclass(ctx: commands.Context):
 
     if report_channel:
         await report_channel.send(report)
-        await ctx.send(f"Class ended. Report posted to {report_channel.mention}.")
+        await ctx.send(f"Aula encerrada. Relatório enviado para {report_channel.mention}.")
     else:
         logger.error("Report channel not found or not configured (REPORT_CHANNEL_ID=%s)", REPORT_CHANNEL_ID)
         await ctx.send(
-            "Class ended, but the report channel is misconfigured "
-            f"(REPORT_CHANNEL_ID={REPORT_CHANNEL_ID!r}). Report:\n{report}"
+            "Aula encerrada, mas o canal de relatório está mal configurado "
+            f"(REPORT_CHANNEL_ID={REPORT_CHANNEL_ID!r}). Relatório:\n{report}"
         )
 
 
 @bot.command(name="presence")
 async def cmd_presence(ctx: commands.Context):
     if not is_teacher(ctx.author):
-        await ctx.send("Permission denied: Teacher role required.")
+        await ctx.send("Permissão negada: cargo de Professor necessário.")
         return
     session = sessions.get(ctx.guild.id)
     if not session or not session.active:
-        await ctx.send("No active class session.")
+        await ctx.send("Nenhuma aula ativa no momento.")
         return
 
     await close_presence(session)  # close any prior check
 
     view = PresenceView(ctx.guild.id)
     msg = await ctx.send(
-        "Presence check open! Click the button or type `!present`.",
+        "Verificação de presença aberta! Clique no botão ou digite `!present`.",
         view=view,
     )
 
@@ -471,17 +471,17 @@ async def cmd_presence(ctx: commands.Context):
 async def cmd_present(ctx: commands.Context):
     session = sessions.get(ctx.guild.id)
     if not session or not session.active:
-        await ctx.send("No active class session.")
+        await ctx.send("Nenhuma aula ativa no momento.")
         return
     if not session.active_presence or not session.active_presence.open:
-        await ctx.send("No open presence check right now.")
+        await ctx.send("Nenhuma verificação de presença aberta no momento.")
         return
     user_id = ctx.author.id
     if user_id in session.active_presence.signatories:
-        await ctx.send("You already signed presence.")
+        await ctx.send("Você já assinou a presença.")
         return
     session.active_presence.signatories.add(user_id)
-    await ctx.send(f"{ctx.author.display_name} signed presence. ✅")
+    await ctx.send(f"{ctx.author.display_name} assinou a presença. ✅")
 
 
 if __name__ == "__main__":
