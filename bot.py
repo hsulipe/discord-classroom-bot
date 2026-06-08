@@ -1,6 +1,8 @@
+import csv
 import json
 import os
 import logging
+import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Optional
@@ -129,18 +131,14 @@ def resolve_name(member_id: int, guild: discord.Guild) -> str:
     return member.display_name if member else f"<id:{member_id}>"
 
 
-def build_report(session: SessionState, guild: discord.Guild) -> str:
+def _compute_session_stats(session: SessionState, guild: discord.Guild):
+    """Returns (end, all_signatories, member_ids, member_time) for report helpers."""
     end = session.end_time or datetime.now(timezone.utc)
-    duration = end - session.start_time
-    total_secs = int(duration.total_seconds())
-    h, rem = divmod(total_secs, 3600)
-    m, s = divmod(rem, 60)
 
     all_signatories: set[int] = set()
     for pc in session.presence_checks:
         all_signatories.update(pc.signatories)
 
-    # Compute per-member time from join/leave log
     member_ids: set[int] = {e["member_id"] for e in session.join_leave_log}
     last_join: dict[int, datetime] = {}
     member_time: dict[int, float] = {}
@@ -153,9 +151,18 @@ def build_report(session: SessionState, guild: discord.Guild) -> str:
         elif event["type"] == "leave" and mid in last_join:
             member_time[mid] = member_time.get(mid, 0.0) + (ts - last_join.pop(mid)).total_seconds()
 
-    # Members still in channel at end
     for mid, join_ts in last_join.items():
         member_time[mid] = member_time.get(mid, 0.0) + (end - join_ts).total_seconds()
+
+    return end, all_signatories, member_ids, member_time
+
+
+def build_report(session: SessionState, guild: discord.Guild) -> str:
+    end, _, member_ids, _ = _compute_session_stats(session, guild)
+    duration = end - session.start_time
+    total_secs = int(duration.total_seconds())
+    h, rem = divmod(total_secs, 3600)
+    m, s = divmod(rem, 60)
 
     lines = ["**Relatório de Presença**"]
     if session.class_name:
@@ -165,28 +172,59 @@ def build_report(session: SessionState, guild: discord.Guild) -> str:
         f"Fim    : {end.strftime('%Y-%m-%d %H:%M:%S UTC')}",
         f"Duração: {h}h {m}m {s}s",
         f"Total de alunos: {len(member_ids)}",
-        "",
     ]
 
     if not member_ids:
         lines.append("Nenhum aluno participou.")
-        return "\n".join(lines)
 
-    lines.append("```")
-    lines.append(f"{'Nome':<24} {'Tempo na aula':<18} Presença")
-    lines.append("-" * 60)
-
-    for mid in member_ids:
-        name = resolve_name(mid, guild)[:23]
-        secs = int(member_time.get(mid, 0))
-        mm, ss = divmod(secs, 60)
-        hh, mm = divmod(mm, 60)
-        time_str = f"{hh}h {mm}m {ss}s" if hh else f"{mm}m {ss}s"
-        status = "Presença confirmada" if mid in all_signatories else "Apenas entrou"
-        lines.append(f"{name:<24} {time_str:<18} {status}")
-
-    lines.append("```")
     return "\n".join(lines)
+
+
+def write_report_csv(session: SessionState, guild: discord.Guild) -> str:
+    """Writes per-student data to a temp CSV and returns its path."""
+    end, all_signatories, member_ids, member_time = _compute_session_stats(session, guild)
+
+    tmp = tempfile.NamedTemporaryFile(
+        mode="w", suffix=".csv", delete=False, encoding="utf-8", newline=""
+    )
+    with tmp:
+        writer = csv.writer(tmp)
+        writer.writerow(["name", "time_seconds", "time_formatted", "presence_status"])
+        for mid in member_ids:
+            name = resolve_name(mid, guild)
+            secs = int(member_time.get(mid, 0))
+            mm, ss = divmod(secs, 60)
+            hh, mm = divmod(mm, 60)
+            time_fmt = f"{hh}h {mm}m {ss}s" if hh else f"{mm}m {ss}s"
+            status = "confirmed" if mid in all_signatories else "joined_only"
+            writer.writerow([name, secs, time_fmt, status])
+
+    return tmp.name
+
+
+async def send_chunked(channel, text: str, limit: int = 4000) -> None:
+    while text:
+        chunk, text = text[:limit], text[limit:]
+        await channel.send(chunk)
+
+
+async def post_report(
+    session: SessionState,
+    guild: discord.Guild,
+    report_text: str,
+    csv_path: str,
+    report_channel,
+    fallback_channel,
+) -> None:
+    channel = report_channel or fallback_channel
+    try:
+        await send_chunked(channel, report_text)
+        await channel.send(file=discord.File(csv_path, filename="relatorio.csv"))
+    finally:
+        try:
+            os.unlink(csv_path)
+        except OSError as exc:
+            logger.warning("Could not delete temp CSV %s: %s", csv_path, exc)
 
 
 @bot.event
@@ -423,9 +461,10 @@ async def cmd_endclass(ctx: commands.Context):
     session.active = False
     session.end_time = datetime.now(timezone.utc)
 
-    await close_presence(session)  # task 6.2: safe even if no presence open
+    await close_presence(session)
 
     report = build_report(session, ctx.guild)
+    csv_path = write_report_csv(session, ctx.guild)
     del sessions[ctx.guild.id]
 
     report_channel: Optional[discord.TextChannel] = None
@@ -435,15 +474,15 @@ async def cmd_endclass(ctx: commands.Context):
         except (ValueError, TypeError):
             pass
 
+    if not report_channel:
+        logger.error("Report channel not found or not configured (REPORT_CHANNEL_ID=%s)", REPORT_CHANNEL_ID)
+
+    await post_report(session, ctx.guild, report, csv_path, report_channel, ctx.channel)
+
     if report_channel:
-        await report_channel.send(report)
         await ctx.send(f"Aula encerrada. Relatório enviado para {report_channel.mention}.")
     else:
-        logger.error("Report channel not found or not configured (REPORT_CHANNEL_ID=%s)", REPORT_CHANNEL_ID)
-        await ctx.send(
-            "Aula encerrada, mas o canal de relatório está mal configurado "
-            f"(REPORT_CHANNEL_ID={REPORT_CHANNEL_ID!r}). Relatório:\n{report}"
-        )
+        await ctx.send("Aula encerrada. Relatório enviado neste canal (canal de relatório não configurado).")
 
 
 @bot.command(name="presence")
