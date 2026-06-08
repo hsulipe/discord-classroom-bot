@@ -81,8 +81,9 @@ def save_names() -> None:
 async def apply_registration(member: discord.Member, real_name: str) -> list[str]:
     """Applies nickname and role after registration. Returns a list of human-readable failure descriptions."""
     issues: list[str] = []
+    nick = real_name[:32]
     try:
-        await member.edit(nick=real_name)
+        await member.edit(nick=nick)
     except discord.Forbidden:
         logger.warning("Could not set nickname for %s (id=%s)", member, member.id)
         issues.append("apelido — o bot precisa da permissão **Gerenciar Apelidos** e seu cargo deve estar acima do seu em Configurações do Servidor → Cargos")
@@ -249,7 +250,7 @@ class RegistrationModal(discord.ui.Modal, title="Cadastre seu Nome"):
         label="Nome Completo",
         placeholder="ex.: João Silva",
         min_length=2,
-        max_length=80,
+        max_length=32,
     )
 
     def __init__(self, thread: Optional[discord.Thread] = None):
